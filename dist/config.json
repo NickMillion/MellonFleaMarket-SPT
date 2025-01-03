@@ -1,0 +1,7 @@
+{
+  "debug": false,
+  "baseValueMult": 2,
+  "baseValueRandomization": 0.35,
+  "lowerBoundMult": 1.5,
+  "upperBoundMult": 6
+}
