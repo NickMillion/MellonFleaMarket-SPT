@@ -122,6 +122,12 @@ class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
         updatedItemCount++;
       }
     }
+
+    // Set the prices
+    const tables = databaseServer.getTables();
+    tables.templates.prices = prices;
+    databaseServer.setTables(tables);
+
     // Log the changed count
     this.ezLog(logger, `Done running! Updated ${updatedItemCount} items`);
     if (config.rerunTimeSeconds > 0) {
