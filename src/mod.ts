@@ -11,6 +11,7 @@ import config from "../config.json";
 import { IHandbookItem } from "@spt/models/eft/common/tables/IHandbookBase";
 import { ITemplateItem } from "@spt/models/eft/common/tables/ITemplateItem";
 import { BaseClasses } from "@spt/models/enums/BaseClasses";
+import { RagfairPriceService } from "@spt/services/RagfairPriceService";
 
 class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -30,6 +31,9 @@ class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
   private mellonFleaMarket(container: DependencyContainer): void {
     const databaseServer = container.resolve<DatabaseServer>("DatabaseServer");
     const logger = container.resolve<ILogger>("WinstonLogger");
+    const ragfair = container.resolve<RagfairPriceService>(
+      "RagfairPriceService"
+    );
 
     if (config.debug) {
       this.ezLog(
@@ -123,10 +127,12 @@ class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
       }
     }
 
-    // Set the prices
+    // Set the prices, idk
     const tables = databaseServer.getTables();
     tables.templates.prices = prices;
     databaseServer.setTables(tables);
+    ragfair.refreshStaticPrices();
+    ragfair.refreshDynamicPrices();
 
     // Log the changed count
     this.ezLog(logger, `Done running! Updated ${updatedItemCount} items`);
