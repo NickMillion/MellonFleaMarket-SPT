@@ -1,9 +1,9 @@
 {
   "debug": false,
   "baseValueMult": 2.25,
-  "baseValueRandomization": 0.66,
+  "baseValueRandomization": 0.25,
   "boundLogging": false,
-  "lowerBoundMult": 1.75,
+  "lowerBoundMult": 1.1,
   "upperBoundMult": 10,
   "requiredPartsLogging": false,
   "rerunTimeSeconds": 600,

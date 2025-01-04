@@ -1,30 +1,28 @@
 /* eslint-disable @typescript-eslint/naming-convention */
 import { DependencyContainer } from "tsyringe";
 
-import { IPreSptLoadMod } from "@spt/models/external/IPreSptLoadMod";
-import { IPostSptLoadMod } from "@spt/models/external/IPostSptLoadMod";
-import { IPostDBLoadMod } from "@spt/models/external/IPostDBLoadMod";
 import { ILogger } from "@spt/models/spt/utils/ILogger";
 import { DatabaseServer } from "@spt/servers/DatabaseServer";
 
 import config from "../config.json";
 import { IHandbookItem } from "@spt/models/eft/common/tables/IHandbookBase";
 import { ITemplateItem } from "@spt/models/eft/common/tables/ITemplateItem";
-import { BaseClasses } from "@spt/models/enums/BaseClasses";
 import { RagfairPriceService } from "@spt/services/RagfairPriceService";
+import { TraderHelper } from "@spt/helpers/TraderHelper";
+import { IPostDBLoadMod } from "@spt/models/external/IPostDBLoadMod";
 
-class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  public preSptLoad(container: DependencyContainer): void {
-    // Not doing anything here
-  }
+class Mod implements IPostDBLoadMod {
+  private static priceClone: Record<string, number> = {};
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   public postDBLoad(container: DependencyContainer): void {
-    // Not doing anything here
-  }
+    // So it doesn't keep going up forever :)
+    const databaseServer = container.resolve<DatabaseServer>("DatabaseServer");
+    const logger = container.resolve<ILogger>("WinstonLogger");
+    const prices = databaseServer.getTables().templates.prices;
+    const pricesClone = JSON.parse(JSON.stringify(prices));
+    Mod.priceClone = pricesClone;
 
-  public postSptLoad(container: DependencyContainer): void {
+    this.ezLog(logger, "MellonFleaMarket is starting...");
     this.mellonFleaMarket(container);
   }
 
@@ -34,19 +32,20 @@ class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
     const ragfair = container.resolve<RagfairPriceService>(
       "RagfairPriceService"
     );
+    const trader = container.resolve<TraderHelper>("TraderHelper");
 
     if (config.debug) {
       this.ezLog(
         logger,
         "MellonFleaMarket debug mode enabled, printing values!"
       );
-      this.ezLog(logger, `${JSON.stringify(config, null, 2)}`);
     }
 
     const itemTable = databaseServer.getTables().templates.items;
     const handbook = databaseServer.getTables().templates.handbook.Items;
-    const prices = databaseServer.getTables().templates.prices;
     const items = databaseServer.getTables().templates.items;
+    // Only edit prices, read from pricesClone
+    const prices = databaseServer.getTables().templates.prices;
 
     let updatedItemCount = 0;
     for (const itemIdx in itemTable) {
@@ -56,8 +55,14 @@ class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
         continue;
       }
 
-      const basePrice = this.getBasePrice(handbook, items, item, logger);
-      const initialFleaPrice = this.getFleaPrice(prices, item._id);
+      const basePrice = this.getBasePrice(
+        handbook,
+        items,
+        item,
+        logger,
+        trader
+      );
+      const initialFleaPrice = this.getFleaPrice(item._id, ragfair);
 
       if (basePrice <= -1 || isNaN(basePrice)) {
         // No handbook price, so no idea what to set the flea price to /shrug
@@ -91,34 +96,26 @@ class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
       const lowerBound = basePrice * config.lowerBoundMult;
       const upperBound = basePrice * config.upperBoundMult;
       if (newFleaPrice < lowerBound) {
+        if (config.debug || config.boundLogging) {
+          this.ezLog(
+            logger,
+            `Setting ${item._props.Name} flea price to lower bound ${lowerBound} since ${newFleaPrice} < ${lowerBound}`
+          );
+        }
         newFleaPrice = lowerBound;
-        if (config.debug || config.boundLogging) {
-          this.ezLog(
-            logger,
-            `Setting ${
-              item._props.Name
-            } flea price to lower bound: ${lowerBound}; was ${
-              basePrice * baseValueMult
-            }`
-          );
-        }
       } else if (newFleaPrice > upperBound) {
-        newFleaPrice = upperBound;
         if (config.debug || config.boundLogging) {
           this.ezLog(
             logger,
-            `Setting ${
-              item._props.Name
-            } flea price to upper bound: ${upperBound}; was ${
-              basePrice * baseValueMult
-            }`
+            `Setting ${item._props.Name} flea price to upper bound ${upperBound} since ${newFleaPrice} > ${upperBound}`
           );
         }
+        newFleaPrice = upperBound;
       }
 
       newFleaPrice = Math.round(newFleaPrice);
       if (newFleaPrice !== initialFleaPrice) {
-        this.setFleaPrice(prices, item._id, newFleaPrice);
+        prices[item._id] = newFleaPrice;
         updated = true;
       }
 
@@ -127,11 +124,6 @@ class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
       }
     }
 
-    // Set the prices, idk
-    const tables = databaseServer.getTables();
-    tables.templates.prices = prices;
-    databaseServer.setTables(tables);
-    ragfair.refreshStaticPrices();
     ragfair.refreshDynamicPrices();
 
     // Log the changed count
@@ -157,29 +149,27 @@ class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
     return -1;
   }
 
-  private getFleaPrice(prices: Record<string, number>, id: string): number {
-    return prices[id] ?? -1;
-  }
-
-  private setFleaPrice(
-    prices: Record<string, number>,
-    id: string,
-    price: number
-  ): void {
-    prices[id] = price;
+  private getFleaPrice(id: string, ragfair: RagfairPriceService): number {
+    return ragfair.getStaticPriceForItem(id) ?? Mod.priceClone[id] ?? -1;
   }
 
   private getBasePrice(
     handbook: IHandbookItem[],
     items: any,
     item: ITemplateItem,
-    logger: ILogger
+    logger: ILogger,
+    trader: TraderHelper
   ): number {
     const id = item._id;
     if (!item || !id) {
       return -1;
     }
+    // Base price is handbook price or vendor price, whichever is higher
     let basePrice = this.getHandbookPrice(handbook, id);
+    const traderBestPrice = trader.getHighestSellToTraderPrice(item._id);
+    if (traderBestPrice > basePrice) {
+      basePrice = traderBestPrice;
+    }
     // Handling built in armor plates
     if (item._props.Slots) {
       const initialPrice = basePrice;
@@ -196,7 +186,8 @@ class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
               handbook,
               items,
               requiredItem,
-              logger
+              logger,
+              trader
             );
             if (requiredPrice > 0) {
               basePrice += requiredPrice;
@@ -214,7 +205,8 @@ class Mod implements IPreSptLoadMod, IPostSptLoadMod, IPostDBLoadMod {
         );
       }
     }
-    return basePrice;
+    // Rounding just in case /shrug
+    return Math.round(basePrice);
   }
 
   private getCategoryFromName(name: string): string {
